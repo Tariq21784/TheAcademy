@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import JSZip from 'jszip';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
+// @ts-ignore
+import pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.entry';
 import { AnswerResult, buildQuizItems, createLearningPlan, evaluateAnswer, QuizItem, Section } from './academy';
 
 type LessonPlan = {
@@ -37,6 +41,78 @@ const scienceCards = [
   },
 ];
 
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker as unknown as string;
+
+function extractTextFromXml(xmlString: string) {
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(xmlString, 'application/xml');
+  const nodes = Array.from(xml.querySelectorAll('w\\:t, t, a\\:t'));
+  return nodes.map((node) => node.textContent?.trim() || '').filter(Boolean).join(' ');
+}
+
+async function parsePdf(file: File) {
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item: any) => (item.str ? item.str : ''))
+      .join(' ');
+    pages.push(pageText);
+  }
+
+  return pages.join('\n\n');
+}
+
+async function parseDocx(file: File) {
+  const data = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(data);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) return '';
+  const xml = await documentFile.async('string');
+  return extractTextFromXml(xml);
+}
+
+async function parsePptx(file: File) {
+  const data = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(data);
+  const slides = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    .sort();
+
+  const slideText = await Promise.all(
+    slides.map(async (slidePath) => {
+      const slideFile = zip.file(slidePath);
+      if (!slideFile) return '';
+      const xml = await slideFile.async('string');
+      return extractTextFromXml(xml);
+    })
+  );
+
+  return slideText.join('\n\n');
+}
+
+async function parseFileContent(file: File) {
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+
+  if (extension === 'pdf') {
+    return parsePdf(file);
+  }
+
+  if (extension === 'docx') {
+    return parseDocx(file);
+  }
+
+  if (extension === 'pptx') {
+    return parsePptx(file);
+  }
+
+  return file.text();
+}
+
 function App() {
   const [uploading, setUploading] = useState(false);
   const [plan, setPlan] = useState<LessonPlan | null>(null);
@@ -60,13 +136,21 @@ function App() {
     }
   }, [plan, quizItems]);
 
-  const handleUpload = async (file: File) => {
+  const handleUploadFiles = async (files: File[]) => {
     setUploading(true);
     setMessage('Creating your adaptive learning plan...');
 
     try {
-      const content = await file.text();
-      const learningPlan = createLearningPlan(content, file.name);
+      const fileContents = await Promise.all(
+        files.map(async (file) => {
+          const content = await parseFileContent(file);
+          return `# ${file.name}\n\n${content}`;
+        })
+      );
+
+      const combined = fileContents.join('\n\n');
+      const learningPlan = createLearningPlan(combined, files.length > 1 ? `${files.length} files` : files[0].name);
+
       setPlan(learningPlan);
       setProgress({ mastery: {}, completed: [] });
       setQuizItems([]);
@@ -75,7 +159,7 @@ function App() {
       setAnswerResult(null);
       setMessage('Your learning plan is ready. Start with the first section or practice now.');
     } catch (error) {
-      setMessage('Failed to read the document. Please try again.');
+      setMessage('Failed to parse one of the files. Please try again or use a supported format.');
     } finally {
       setUploading(false);
     }
@@ -116,16 +200,17 @@ function App() {
 
       <main>
         <section className="upload-panel card">
-          <h2>Upload a document</h2>
-          <p>Supported files: .txt, .md. The system extracts sections, builds lessons, and generates quiz practice.</p>
+          <h2>Upload one or more documents</h2>
+          <p>Supported files: .txt, .md, .pdf, .docx, .pptx. Upload multiple files and the system combines them into a single adaptive plan.</p>
           <label className="upload-box">
             <input
               type="file"
-              accept=".txt,.md"
+              accept=".txt,.md,.pdf,.docx,.pptx"
+              multiple
               disabled={uploading}
-              onChange={(event) => event.target.files?.[0] && handleUpload(event.target.files[0])}
+              onChange={(event) => event.target.files?.length && handleUploadFiles(Array.from(event.target.files))}
             />
-            <span>{uploading ? 'Loading...' : 'Choose file'}</span>
+            <span>{uploading ? 'Loading...' : 'Choose files'}</span>
           </label>
           <p className="status-message">{message}</p>
         </section>

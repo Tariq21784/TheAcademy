@@ -5,7 +5,8 @@ This version supports document upload, automated lesson planning, section-based 
 
 ## What it includes
 
-- Upload `.txt` or `.md` documents and turn them into a learning plan.
+- Upload `.txt`, `.md`, `.pdf`, `.docx`, or `.pptx` files and turn them into a learning plan.
+- Upload multiple documents at once and combine them into a single adaptive study path.
 - Automatic section extraction and keyword analysis.
 - Science-backed pedagogy: direct instruction, spaced retrieval, mastery learning, Bloom 2 Sigma-style feedback.
 - Practice quizzes created from each section.
